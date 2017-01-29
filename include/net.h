@@ -416,7 +416,7 @@ extern int		NetRestartWrap;		/* Tried all network devices */
 
 enum proto_t {
 	BOOTP, RARP, ARP, TFTPGET, DHCP, PING, DNS, NFS, CDP, NETCONS, SNTP,
-	TFTPSRV, TFTPPUT, LINKLOCAL
+	TFTPSRV, TFTPPUT, LINKLOCAL,
 };
 
 /* from net/net.c */
@@ -573,6 +573,17 @@ static inline void NetWriteIP(void *to, IPaddr_t ip)
 static inline void NetCopyIP(void *to, void *from)
 {
 	memcpy((void *)to, from, sizeof(IPaddr_t));
+}
+
+/* copy IP */
+static inline void NetCopy_LEIP(void *to, void *from)
+{
+	uint32_t ip, le_ip;
+
+	/* from may point to address which is not aligned to 4-bytes boundary. */
+	memcpy(&le_ip, from, sizeof(IPaddr_t));
+	ip = __le32_to_cpu(le_ip);
+	*(uint32_t*)to = __cpu_to_be32(ip);
 }
 
 /* copy ulong */

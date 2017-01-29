@@ -60,6 +60,8 @@ typedef enum {
 	PHY_INTERFACE_MODE_RGMII_TXID,
 	PHY_INTERFACE_MODE_RTBI,
 	PHY_INTERFACE_MODE_XGMII,
+	PHY_INTERFACE_MODE_QSGMII,
+	PHY_INTERFACE_MODE_PSGMII,
 	PHY_INTERFACE_MODE_NONE	/* Must be last */
 } phy_interface_t;
 
@@ -75,6 +77,8 @@ static const char *phy_interface_strings[] = {
 	[PHY_INTERFACE_MODE_RGMII_TXID]		= "rgmii-txid",
 	[PHY_INTERFACE_MODE_RTBI]		= "rtbi",
 	[PHY_INTERFACE_MODE_XGMII]		= "xgmii",
+	[PHY_INTERFACE_MODE_QSGMII]		= "qsgmii",
+	[PHY_INTERFACE_MODE_PSGMII]		= "psgmii",
 	[PHY_INTERFACE_MODE_NONE]		= "",
 };
 
@@ -102,6 +106,7 @@ struct mii_dev {
 	int (*reset)(struct mii_dev *bus);
 	struct phy_device *phymap[PHY_MAX_ADDR];
 	u32 phy_mask;
+	uint gmac_base;
 };
 
 /* struct phy_driver: a structure which defines PHY behavior

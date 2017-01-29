@@ -50,8 +50,7 @@ DECLARE_GLOBAL_DATA_PTR;
 /*
  * Board-specific Platform code can reimplement show_boot_progress () if needed
  */
-void inline __show_boot_progress (int val) {}
-void show_boot_progress (int val) __attribute__((weak, alias("__show_boot_progress")));
+void inline show_boot_progress (int val) {}
 
 #if defined(CONFIG_UPDATE_TFTP)
 int update_tftp (ulong addr);
@@ -908,7 +907,7 @@ static int cread_line(const char *const prompt, char *buf, unsigned int *len,
  *		-1 if break
  *		-2 if timed out
  */
-int readline (const char *const prompt)
+int __readline (const char *const prompt, int show_buf)
 {
 	/*
 	 * If console_buffer isn't 0-length the user will be prompted to modify
@@ -920,7 +919,7 @@ int readline (const char *const prompt)
 }
 
 
-int readline_into_buffer(const char *const prompt, char *buffer, int timeout)
+int __readline_into_buffer(const char *const prompt, char *buffer, int timeout, int show_buf)
 {
 	char *p = buffer;
 #ifdef CONFIG_CMDLINE_EDITING
@@ -959,7 +958,14 @@ int readline_into_buffer(const char *const prompt, char *buffer, int timeout)
 		plen = strlen (prompt);
 		puts (prompt);
 	}
-	col = plen;
+	if (show_buf) {
+		puts (p);
+		n = strlen(p);
+		col = plen + strlen(p);
+		p += strlen(p);
+	}
+	else
+		col = plen;
 
 	for (;;) {
 #ifdef CONFIG_BOOT_RETRY_TIME

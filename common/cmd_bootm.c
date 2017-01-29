@@ -62,6 +62,10 @@
 #include <linux/lzo.h>
 #endif /* CONFIG_LZO */
 
+#ifdef crc32
+#undef crc32
+#endif
+
 DECLARE_GLOBAL_DATA_PTR;
 
 #ifndef CONFIG_SYS_BOOTM_LEN
@@ -212,14 +216,6 @@ static int bootm_start(cmd_tbl_t *cmdtp, int flag, int argc, char * const argv[]
 
 	/* get image parameters */
 	switch (genimg_get_format(os_hdr)) {
-	case IMAGE_FORMAT_LEGACY:
-		images.os.type = image_get_type(os_hdr);
-		images.os.comp = image_get_comp(os_hdr);
-		images.os.os = image_get_os(os_hdr);
-
-		images.os.end = image_get_image_end(os_hdr);
-		images.os.load = image_get_load(os_hdr);
-		break;
 #if defined(CONFIG_FIT)
 	case IMAGE_FORMAT_FIT:
 		if (fit_image_get_type(images.fit_hdr_os,
@@ -421,9 +417,9 @@ static int bootm_load_os(image_info_t os, ulong *load_end, int boot_progress)
 		printf("Unimplemented compression type %d\n", comp);
 		return BOOTM_ERR_UNIMPLEMENTED;
 	}
-
+#if (CONFIG_IPQ_CACHE_ENABLE == 1)
 	flush_cache(load, (*load_end - load) * sizeof(ulong));
-
+#endif
 	puts("OK\n");
 	debug("   kernel loaded at 0x%08lx, end = 0x%08lx\n", load, *load_end);
 	bootstage_mark(BOOTSTAGE_ID_KERNEL_LOADED);
@@ -612,8 +608,9 @@ int do_bootm(cmd_tbl_t *cmdtp, int flag, int argc, char * const argv[])
 			return do_bootm_subcommand(cmdtp, flag, argc, argv);
 	}
 
-	if (bootm_start(cmdtp, flag, argc, argv))
+	if (bootm_start(cmdtp, flag, argc, argv)) {
 		return 1;
+	}
 
 	/*
 	 * We have reached the point of no return: we are going to
@@ -691,6 +688,13 @@ int do_bootm(cmd_tbl_t *cmdtp, int flag, int argc, char * const argv[])
 		return 1;
 	}
 
+#ifdef CONFIG_IPQ806X_PCI
+	board_pci_deinit();
+#endif /* CONFIG_IPQ806X_PCI */
+#ifdef CONFIG_IPQ_MMC
+	board_mmc_deinit();
+#endif
+
 	arch_preboot_os();
 
 	boot_fn(0, argc, argv, &images);
@@ -712,6 +716,7 @@ int bootm_maybe_autostart(cmd_tbl_t *cmdtp, const char *cmd)
 		char *local_args[2];
 		local_args[0] = (char *)cmd;
 		local_args[1] = NULL;
+
 		printf("Automatic boot of image at addr 0x%08lX ...\n", load_addr);
 		return do_bootm(cmdtp, 0, 1, local_args);
 	}
@@ -762,11 +767,13 @@ static image_header_t *image_get_kernel(ulong img_addr, int verify)
 	}
 	bootstage_mark(BOOTSTAGE_ID_CHECK_ARCH);
 
+#ifndef CONFIG_IPQ_FIRMWARE
 	if (!image_check_target_arch(hdr)) {
 		printf("Unsupported Architecture 0x%x\n", image_get_arch(hdr));
 		bootstage_error(BOOTSTAGE_ID_CHECK_ARCH);
 		return NULL;
 	}
+#endif
 	return hdr;
 }
 
@@ -875,8 +882,10 @@ static void *boot_get_kernel(cmd_tbl_t *cmdtp, int flag, int argc,
 	*os_data = *os_len = 0;
 	switch (genimg_get_format((void *)img_addr)) {
 	case IMAGE_FORMAT_LEGACY:
+#ifndef CONFIG_IPQ_FIRMWARE
 		printf("## Booting kernel from Legacy Image at %08lx ...\n",
 				img_addr);
+#endif
 		hdr = image_get_kernel(img_addr, images->verify);
 		if (!hdr)
 			return NULL;
@@ -886,6 +895,9 @@ static void *boot_get_kernel(cmd_tbl_t *cmdtp, int flag, int argc,
 		switch (image_get_type(hdr)) {
 		case IH_TYPE_KERNEL:
 		case IH_TYPE_KERNEL_NOLOAD:
+#ifdef CONFIG_IPQ_FIRMWARE
+                case IH_TYPE_FIRMWARE:
+#endif
 			*os_data = image_get_data(hdr);
 			*os_len = image_get_data_size(hdr);
 			break;

@@ -45,13 +45,13 @@ enum {
  * @size: how many physical eraseblocks are reserved for this volume
  * @used_bytes: how many bytes of data this volume contains
  * @used_ebs: how many physical eraseblocks of this volume actually contain any
- * data
+ *            data
  * @vol_type: volume type (%UBI_DYNAMIC_VOLUME or %UBI_STATIC_VOLUME)
  * @corrupted: non-zero if the volume is corrupted (static volumes only)
  * @upd_marker: non-zero if the volume has update marker set
  * @alignment: volume alignment
  * @usable_leb_size: how many bytes are available in logical eraseblocks of
- * this volume
+ *                   this volume
  * @name_len: volume name length
  * @name: volume name
  * @cdev: UBI volume character device major and minor numbers
@@ -138,6 +138,8 @@ struct ubi_volume_desc;
 int ubi_get_device_info(int ubi_num, struct ubi_device_info *di);
 void ubi_get_volume_info(struct ubi_volume_desc *desc,
 			 struct ubi_volume_info *vi);
+
+long long ubi_get_volume_size(char *volume);
 struct ubi_volume_desc *ubi_open_volume(int ubi_num, int vol_id, int mode);
 struct ubi_volume_desc *ubi_open_volume_nm(int ubi_num, const char *name,
 					   int mode);

@@ -191,6 +191,20 @@ gccincdir := $(shell $(CC) -print-file-name=include)
 CPPFLAGS := $(DBGFLAGS) $(OPTFLAGS) $(RELFLAGS)		\
 	-D__KERNEL__
 
+ifneq ($(CONFIG_MODEL),)
+ifneq ($(findstring 4G-,$(CONFIG_MODEL)),)
+MODEL = RT$(subst -,,$(CONFIG_MODEL))
+else ifneq ($(findstring DSL,$(CONFIG_MODEL)),)
+MODEL = $(subst -,_,$(CONFIG_MODEL))
+else
+MODEL = $(subst -,,$(CONFIG_MODEL))
+endif
+export MODEL
+endif
+
+# use shell to run echo command to strip double-quote character from $(MODEL)
+CPPFLAGS += $(if $(MODEL),-D$(shell echo $(MODEL)))
+
 # Enable garbage collection of un-used sections for SPL
 ifeq ($(CONFIG_SPL_BUILD),y)
 CPPFLAGS += -ffunction-sections -fdata-sections
@@ -232,8 +246,12 @@ else
 CFLAGS := $(CPPFLAGS) -Wall -Wstrict-prototypes
 endif
 
+CFLAGS += $(QSDK_CFLAGS)
+
 CFLAGS_SSP := $(call cc-option,-fno-stack-protector)
 CFLAGS += $(CFLAGS_SSP)
+#CFLAGS += -DDEBUG_FACTORY_RW
+#CFLAGS += -DDEBUG_LED_GPIO
 # Some toolchains enable security related warning flags by default,
 # but they don't make much sense in the u-boot world, so disable them.
 CFLAGS_WARN := $(call cc-option,-Wno-format-nonliteral) \

@@ -110,7 +110,7 @@ struct ubi_volume_desc *ubi_open_volume(int ubi_num, int vol_id, int mode)
 	struct ubi_device *ubi;
 	struct ubi_volume *vol;
 
-	dbg_msg("open device %d volume %d, mode %d", ubi_num, vol_id, mode);
+	dbg_gen("open device %d, volume %d, mode %d", ubi_num, vol_id, mode);
 
 	if (ubi_num < 0 || ubi_num >= UBI_MAX_DEVICES)
 		return ERR_PTR(-EINVAL);
@@ -200,6 +200,8 @@ out_free:
 	kfree(desc);
 out_put_ubi:
 	ubi_put_device(ubi);
+	dbg_err("cannot open device %d, volume %d, error %d",
+		ubi_num, vol_id, err);
 	return ERR_PTR(err);
 }
 EXPORT_SYMBOL_GPL(ubi_open_volume);
@@ -219,7 +221,7 @@ struct ubi_volume_desc *ubi_open_volume_nm(int ubi_num, const char *name,
 	struct ubi_device *ubi;
 	struct ubi_volume_desc *ret;
 
-	dbg_msg("open volume %s, mode %d", name, mode);
+	dbg_gen("open device %d, volume %s, mode %d", ubi_num, name, mode);
 
 	if (!name)
 		return ERR_PTR(-EINVAL);
@@ -270,7 +272,8 @@ void ubi_close_volume(struct ubi_volume_desc *desc)
 	struct ubi_volume *vol = desc->vol;
 	struct ubi_device *ubi = vol->ubi;
 
-	dbg_msg("close volume %d, mode %d", vol->vol_id, desc->mode);
+	dbg_gen("close device %d, volume %d, mode %d",
+		ubi->ubi_num, vol->vol_id, desc->mode);
 
 	spin_lock(&ubi->volumes_lock);
 	switch (desc->mode) {
@@ -327,7 +330,7 @@ int ubi_leb_read(struct ubi_volume_desc *desc, int lnum, char *buf, int offset,
 	struct ubi_device *ubi = vol->ubi;
 	int err, vol_id = vol->vol_id;
 
-	dbg_msg("read %d bytes from LEB %d:%d:%d", len, vol_id, lnum, offset);
+	dbg_gen("read %d bytes from LEB %d:%d:%d", len, vol_id, lnum, offset);
 
 	if (vol_id < 0 || vol_id >= ubi->vtbl_slots || lnum < 0 ||
 	    lnum >= vol->used_ebs || offset < 0 || len < 0 ||
@@ -392,7 +395,7 @@ int ubi_leb_write(struct ubi_volume_desc *desc, int lnum, const void *buf,
 	struct ubi_device *ubi = vol->ubi;
 	int vol_id = vol->vol_id;
 
-	dbg_msg("write %d bytes to LEB %d:%d:%d", len, vol_id, lnum, offset);
+	dbg_gen("write %d bytes to LEB %d:%d:%d", len, vol_id, lnum, offset);
 
 	if (vol_id < 0 || vol_id >= ubi->vtbl_slots)
 		return -EINVAL;
@@ -429,7 +432,7 @@ EXPORT_SYMBOL_GPL(ubi_leb_write);
  *
  * This function changes the contents of a logical eraseblock atomically. @buf
  * has to contain new logical eraseblock data, and @len - the length of the
- * data, which has to be aligned. The length may be shorter then the logical
+ * data, which has to be aligned. The length may be shorter than the logical
  * eraseblock size, ant the logical eraseblock may be appended to more times
  * later on. This function guarantees that in case of an unclean reboot the old
  * contents is preserved. Returns zero in case of success and a negative error
@@ -442,7 +445,7 @@ int ubi_leb_change(struct ubi_volume_desc *desc, int lnum, const void *buf,
 	struct ubi_device *ubi = vol->ubi;
 	int vol_id = vol->vol_id;
 
-	dbg_msg("atomically write %d bytes to LEB %d:%d", len, vol_id, lnum);
+	dbg_gen("atomically write %d bytes to LEB %d:%d", len, vol_id, lnum);
 
 	if (vol_id < 0 || vol_id >= ubi->vtbl_slots)
 		return -EINVAL;
@@ -486,7 +489,7 @@ int ubi_leb_erase(struct ubi_volume_desc *desc, int lnum)
 	struct ubi_device *ubi = vol->ubi;
 	int err;
 
-	dbg_msg("erase LEB %d:%d", vol->vol_id, lnum);
+	dbg_gen("erase LEB %d:%d", vol->vol_id, lnum);
 
 	if (desc->mode == UBI_READONLY || vol->vol_type == UBI_STATIC_VOLUME)
 		return -EROFS;
@@ -512,7 +515,7 @@ EXPORT_SYMBOL_GPL(ubi_leb_erase);
  *
  * This function un-maps logical eraseblock @lnum and schedules the
  * corresponding physical eraseblock for erasure, so that it will eventually be
- * physically erased in background. This operation is much faster then the
+ * physically erased in background. This operation is much faster than the
  * erase operation.
  *
  * Unlike erase, the un-map operation does not guarantee that the logical
@@ -531,7 +534,7 @@ EXPORT_SYMBOL_GPL(ubi_leb_erase);
  *
  * The main and obvious use-case of this function is when the contents of a
  * logical eraseblock has to be re-written. Then it is much more efficient to
- * first un-map it, then write new data, rather then first erase it, then write
+ * first un-map it, then write new data, rather than first erase it, then write
  * new data. Note, once new data has been written to the logical eraseblock,
  * UBI guarantees that the old contents has gone forever. In other words, if an
  * unclean reboot happens after the logical eraseblock has been un-mapped and
@@ -546,7 +549,7 @@ int ubi_leb_unmap(struct ubi_volume_desc *desc, int lnum)
 	struct ubi_volume *vol = desc->vol;
 	struct ubi_device *ubi = vol->ubi;
 
-	dbg_msg("unmap LEB %d:%d", vol->vol_id, lnum);
+	dbg_gen("unmap LEB %d:%d", vol->vol_id, lnum);
 
 	if (desc->mode == UBI_READONLY || vol->vol_type == UBI_STATIC_VOLUME)
 		return -EROFS;
@@ -568,7 +571,7 @@ EXPORT_SYMBOL_GPL(ubi_leb_unmap);
  * @dtype: expected data type
  *
  * This function maps an un-mapped logical eraseblock @lnum to a physical
- * eraseblock. This means, that after a successfull invocation of this
+ * eraseblock. This means, that after a successful invocation of this
  * function the logical eraseblock @lnum will be empty (contain only %0xFF
  * bytes) and be mapped to a physical eraseblock, even if an unclean reboot
  * happens.
@@ -583,7 +586,7 @@ int ubi_leb_map(struct ubi_volume_desc *desc, int lnum, int dtype)
 	struct ubi_volume *vol = desc->vol;
 	struct ubi_device *ubi = vol->ubi;
 
-	dbg_msg("unmap LEB %d:%d", vol->vol_id, lnum);
+	dbg_gen("unmap LEB %d:%d", vol->vol_id, lnum);
 
 	if (desc->mode == UBI_READONLY || vol->vol_type == UBI_STATIC_VOLUME)
 		return -EROFS;
@@ -625,7 +628,7 @@ int ubi_is_mapped(struct ubi_volume_desc *desc, int lnum)
 {
 	struct ubi_volume *vol = desc->vol;
 
-	dbg_msg("test LEB %d:%d", vol->vol_id, lnum);
+	dbg_gen("test LEB %d:%d", vol->vol_id, lnum);
 
 	if (lnum < 0 || lnum >= vol->reserved_pebs)
 		return -EINVAL;

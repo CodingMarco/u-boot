@@ -104,7 +104,12 @@
 #endif
 #include "tftp.h"
 
+extern void TftpSend(void);
+
 DECLARE_GLOBAL_DATA_PTR;
+
+extern void TftpdStart(void);
+IPaddr_t TempServerIP=0;
 
 /** BOOTP EXTENTIONS **/
 
@@ -319,7 +324,7 @@ int NetLoop(enum proto_t protocol)
 	eth_set_current();
 	if (eth_init(bd) < 0) {
 		eth_halt();
-		return -1;
+		goto leave;
 	}
 
 restart:
@@ -333,11 +338,19 @@ restart:
 	debug_cond(DEBUG_INT_STATE, "--- NetLoop Init\n");
 	NetInitLoop();
 
+	if (NetOurEther[0] & 0x1) {
+		uchar *p = NetOurEther;
+
+		printf("Invalid %s->enetaddr %02x:%02x:%02x:%02x:%02x:%02x\n",
+			eth_get_dev()->name, p[0], p[1], p[2], p[3], p[4], p[5]);
+		*p &= 0xFE;
+	}
+
 	switch (net_check_prereq(protocol)) {
 	case 1:
 		/* network not configured */
 		eth_halt();
-		return -1;
+		goto leave;
 
 	case 2:
 		/* network device not configured */
@@ -440,6 +453,7 @@ restart:
 	 *	Main packet reception loop.  Loop receiving packets until
 	 *	someone sets `net_state' to a state that terminates.
 	 */
+
 	for (;;) {
 		WATCHDOG_RESET();
 #ifdef CONFIG_SHOW_ACTIVITY
@@ -538,6 +552,8 @@ done:
 	net_set_udp_handler(NULL);
 	net_set_icmp_handler(NULL);
 #endif
+
+leave:
 	return ret;
 }
 
@@ -1154,6 +1170,7 @@ NetReceive(uchar *inpkt, int len)
 		/*
 		 *	IP header OK.  Pass the packet to the current handler.
 		 */
+		NetCopyIP(&TempServerIP,(void*)&ip->ip_src);/*TempServerIP is used in TFTPD */
 		(*udp_packet_handler)((uchar *)ip + IP_UDP_HDR_SIZE,
 				ntohs(ip->udp_dst),
 				src_ip,

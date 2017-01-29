@@ -515,7 +515,7 @@ int nand_write_skip_bad(nand_info_t *nand, loff_t offset, size_t *length,
 		return -EINVAL;
 	}
 
-	if (!need_skip && !(flags & WITH_DROP_FFS)) {
+	if (!need_skip && !(flags & WITH_DROP_FFS) && !(flags & WITH_YAFFS_OOB)) {
 		rval = nand_write (nand, offset, length, buffer);
 		if (rval == 0)
 			return 0;
@@ -621,6 +621,7 @@ int nand_read_skip_bad(nand_info_t *nand, loff_t offset, size_t *length,
 	size_t left_to_read = *length;
 	u_char *p_buffer = buffer;
 	int need_skip;
+	uint32_t failed;
 
 	if ((offset & (nand->writesize - 1)) != 0) {
 		printf ("Attempt to read non page aligned data\n");
@@ -640,12 +641,14 @@ int nand_read_skip_bad(nand_info_t *nand, loff_t offset, size_t *length,
 		if (!rval || rval == -EUCLEAN)
 			return 0;
 
-		*length = 0;
+		if (rval != -EBADMSG)
+			*length = 0;
 		printf ("NAND read from offset %llx failed %d\n",
 			offset, rval);
 		return rval;
 	}
 
+	failed = nand->ecc_stats.failed;
 	while (left_to_read > 0) {
 		size_t block_offset = offset & (nand->erasesize - 1);
 		size_t read_length;
@@ -668,14 +671,19 @@ int nand_read_skip_bad(nand_info_t *nand, loff_t offset, size_t *length,
 		if (rval && rval != -EUCLEAN) {
 			printf ("NAND read from offset %llx failed %d\n",
 				offset, rval);
-			*length -= left_to_read;
-			return rval;
+			if (rval != -EBADMSG) {
+				*length -= left_to_read;
+				return rval;
+			}
 		}
 
 		left_to_read -= read_length;
 		offset       += read_length;
 		p_buffer     += read_length;
 	}
+
+	if (nand->ecc_stats.failed != failed)
+		return -EBADMSG;
 
 	return 0;
 }

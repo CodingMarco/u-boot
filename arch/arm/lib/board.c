@@ -52,6 +52,9 @@
 #include <fdtdec.h>
 #include <post.h>
 #include <logbuff.h>
+#ifdef CONFIG_SYS_HUSH_PARSER
+#include <hush.h>
+#endif
 
 #ifdef CONFIG_BITBANGMII
 #include <miiphy.h>
@@ -66,6 +69,10 @@
 
 DECLARE_GLOBAL_DATA_PTR;
 
+#ifdef crc32
+#undef crc32
+#endif
+
 ulong monitor_flash_len;
 
 #ifdef CONFIG_HAS_DATAFLASH
@@ -77,31 +84,6 @@ extern void dataflash_print_info(void);
     defined(CONFIG_SOFT_I2C)
 #include <i2c.h>
 #endif
-
-/************************************************************************
- * Coloured LED functionality
- ************************************************************************
- * May be supplied by boards if desired
- */
-inline void __coloured_LED_init(void) {}
-void coloured_LED_init(void)
-	__attribute__((weak, alias("__coloured_LED_init")));
-inline void __red_led_on(void) {}
-void red_led_on(void) __attribute__((weak, alias("__red_led_on")));
-inline void __red_led_off(void) {}
-void red_led_off(void) __attribute__((weak, alias("__red_led_off")));
-inline void __green_led_on(void) {}
-void green_led_on(void) __attribute__((weak, alias("__green_led_on")));
-inline void __green_led_off(void) {}
-void green_led_off(void) __attribute__((weak, alias("__green_led_off")));
-inline void __yellow_led_on(void) {}
-void yellow_led_on(void) __attribute__((weak, alias("__yellow_led_on")));
-inline void __yellow_led_off(void) {}
-void yellow_led_off(void) __attribute__((weak, alias("__yellow_led_off")));
-inline void __blue_led_on(void) {}
-void blue_led_on(void) __attribute__((weak, alias("__blue_led_on")));
-inline void __blue_led_off(void) {}
-void blue_led_off(void) __attribute__((weak, alias("__blue_led_off")));
 
 /*
  ************************************************************************
@@ -125,6 +107,7 @@ static int init_baudrate(void)
 static int display_banner(void)
 {
 	printf("\n\n%s\n\n", version_string);
+
 	debug("U-Boot code: %08lX -> %08lX  BSS: -> %08lX\n",
 	       _TEXT_BASE,
 	       _bss_start_ofs + _TEXT_BASE, _bss_end_ofs + _TEXT_BASE);
@@ -325,8 +308,16 @@ void board_init_f(ulong bootflag)
 	 */
 	gd->ram_size -= CONFIG_SYS_MEM_TOP_HIDE;
 #endif
-
+#ifdef CONFIG_IPQ40XX_XIP
+	addr= _TEXT_BASE;
+#else
 	addr = CONFIG_SYS_SDRAM_BASE + gd->ram_size;
+#endif
+
+#ifdef CONFIG_IPQ_APPSBL_DLOAD
+	/* We reserve 2MB of memory when built with crashdump enabled */
+	gd->ram_size -= (2 * 1024 * 1024);
+#endif
 
 #ifdef CONFIG_LOGBUFFER
 #ifndef CONFIG_ALT_LB_ADDR
@@ -371,6 +362,7 @@ void board_init_f(ulong bootflag)
 #endif /* CONFIG_FB_ADDR */
 #endif /* CONFIG_LCD */
 
+#ifndef CONFIG_IPQ40XX_XIP
 	/*
 	 * reserve memory for U-Boot code, data & bss
 	 * round down to next 4 kB limit
@@ -379,6 +371,7 @@ void board_init_f(ulong bootflag)
 	addr &= ~(4096 - 1);
 
 	debug("Reserving %ldk for U-Boot at: %08lx\n", gd->mon_len >> 10, addr);
+#endif
 
 #ifndef CONFIG_SPL_BUILD
 	/*
@@ -435,13 +428,24 @@ void board_init_f(ulong bootflag)
 	dram_init_banksize();
 	display_dram_config();	/* and display it */
 
+#ifdef CONFIG_IPQ40XX_XIP
+	gd->relocaddr = _TEXT_BASE;
+	gd->start_addr_sp = addr_sp;
+	gd->reloc_off = 0;
+#else
 	gd->relocaddr = addr;
 	gd->start_addr_sp = addr_sp;
 	gd->reloc_off = addr - _TEXT_BASE;
+#endif
+
 	debug("relocation Offset is: %08lx\n", gd->reloc_off);
 	memcpy(id, (void *)gd, sizeof(gd_t));
 
+#ifdef CONFIG_IPQ40XX_XIP
+	relocate_code(addr_sp, id, _TEXT_BASE);
+#else
 	relocate_code(addr_sp, id, addr);
+#endif
 
 	/* NOTREACHED - relocate_code() does not return */
 }
@@ -466,6 +470,10 @@ void board_init_r(gd_t *id, ulong dest_addr)
 	ulong malloc_start;
 #if !defined(CONFIG_SYS_NO_FLASH)
 	ulong flash_size;
+#endif
+#ifdef CONFIG_IPQ_APPSBL_DLOAD
+	unsigned long * dmagic1 = (unsigned long *) 0x2A03F000;
+	unsigned long * dmagic2 = (unsigned long *) 0x2A03F004;
 #endif
 
 	gd = id;
@@ -505,6 +513,11 @@ void board_init_r(gd_t *id, ulong dest_addr)
 	/* The Malloc area is immediately below the monitor copy in DRAM */
 	malloc_start = dest_addr - TOTAL_MALLOC_LEN;
 	mem_malloc_init (malloc_start, TOTAL_MALLOC_LEN);
+
+	printf("Maximum malloc length: %d KBytes\n", CONFIG_SYS_MALLOC_LEN >> 10);
+	printf("mem_malloc_start/brk/end: 0x%lx/%lx/%lx\n",
+		mem_malloc_start, mem_malloc_brk, mem_malloc_end);
+	printf("Relocation offset: %lx\n", gd->reloc_off);
 
 #ifdef CONFIG_ARCH_EARLY_INIT_R
 	arch_early_init_r();
@@ -585,10 +598,30 @@ void board_init_r(gd_t *id, ulong dest_addr)
 	misc_init_r();
 #endif
 
+#if defined(CONFIG_UBI_SUPPORT)
+#ifdef UBOOT_ON_NAND
+	ranand_check_and_fix_bootloader();
+#endif /* UBOOT_ON_NAND */
+#endif
+
 	 /* set up exceptions */
 	interrupt_init();
 	/* enable exceptions */
 	enable_interrupts();
+
+#ifdef CONFIG_IPQ_APPSBL_DLOAD
+	/* check if we are in download mode */
+	if (*dmagic1 == 0xE47B337D && *dmagic2 == 0x0501CAB0) {
+		/* clear the magic and run the dump command */
+		*dmagic1 = 0;
+		*dmagic2 = 0;
+		printf("\nCrashdump magic found, clear it and reboot!\n");
+		/* reset the system, some images might not be loaded
+		 * when crashmagic is found
+		 */
+		run_command("reset", 0);
+	}
+#endif
 
 	/* Perform network card initialisation if necessary */
 #if defined(CONFIG_DRIVER_SMC91111) || defined (CONFIG_DRIVER_LAN91C96)

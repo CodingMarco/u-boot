@@ -22,6 +22,7 @@
 #
 
 include $(TOPDIR)/config.mk
+include $(OBJTREE)/include/autoconf.mk
 
 LIB	= $(obj)libcommon.o
 

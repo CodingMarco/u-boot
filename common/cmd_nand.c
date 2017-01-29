@@ -37,11 +37,44 @@ int find_dev_and_part(const char *id, struct mtd_device **dev,
 		      u8 *part_num, struct part_info **part);
 #endif
 
+#if defined(DEBUG_BAD_BLOCK)
+int nand_read_raw (struct mtd_info *mtd, uint8_t *buf, loff_t from, size_t len, size_t ooblen)
+{
+	struct mtd_oob_ops ops = {
+		.datbuf = buf,
+		.len = len,
+		.oobbuf = buf + mtd->writesize,
+		.ooblen = ooblen,
+		.mode = MTD_OOB_RAW
+	};
+
+	debug("%s: from: 0x%x mode: 0x%x len: 0x%x retlen: 0x%x\n"
+		"ooblen: 0x%x oobretlen: 0x%x ooboffs: 0x%x datbuf: %p "
+		"oobbuf: %p\n", __func__, (uint32_t)from,
+		ops.mode, ops.len, ops.retlen, ops.ooblen,
+		ops.oobretlen, ops.ooboffs, ops.datbuf,
+		ops.oobbuf);
+
+	debug("0x%x %p %p %u\n", (uint32_t)from, ops.oobbuf, ops.datbuf, ops.len);
+
+	if (!len) {
+		ops.datbuf = 0;
+		ops.oobbuf = buf;
+	}
+	if (!ooblen)
+		ops.oobbuf = NULL;
+
+	return mtd->read_oob(mtd, from, &ops);
+}
+#endif
+
 static int nand_dump(nand_info_t *nand, ulong off, int only_oob, int repeat)
 {
-	int i;
+	int i, j, o;
+	char c;
 	u_char *datbuf, *oobbuf, *p;
 	static loff_t last;
+	uint32_t writesize_shift = ffs(nand->writesize) - 1;
 
 	if (repeat)
 		off = last + nand->writesize;
@@ -70,26 +103,38 @@ static int nand_dump(nand_info_t *nand, ulong off, int only_oob, int repeat)
 		free(oobbuf);
 		return 1;
 	}
-	printf("Page %08lx dump:\n", off);
+	printf("Address %08lx (page %lx) dump:\n", off, off >> writesize_shift);
 	i = nand->writesize >> 4;
 	p = datbuf;
 
-	while (i--) {
-		if (!only_oob)
-			printf("\t%02x %02x %02x %02x %02x %02x %02x %02x"
-			       "  %02x %02x %02x %02x %02x %02x %02x %02x\n",
-			       p[0], p[1], p[2], p[3], p[4], p[5], p[6], p[7],
-			       p[8], p[9], p[10], p[11], p[12], p[13], p[14],
-			       p[15]);
-		p += 16;
+	for (o = 0; !only_oob && i > 0; o += 16, p += 16, i--) {
+		printf("%08X:\t%02X %02X %02X %02X %02X %02X %02X %02X"
+			"-%02X %02X %02X %02X %02X %02X %02X %02X    ",
+		       o, p[0], p[1], p[2], p[3], p[4], p[5], p[6], p[7],
+		       p[8], p[9], p[10], p[11], p[12], p[13], p[14], p[15]);
+		for (j = 0; j < 16; ++j) {
+			c = *(p + j);
+			if (c < 0x20 || c >0x7f)
+				c = '.';
+			printf("%c", c);
+		}
+		printf("\n");
 	}
 	puts("OOB:\n");
-	i = nand->oobsize >> 3;
+	i = nand->oobsize >> 4;
 	p = oobbuf;
-	while (i--) {
-		printf("\t%02x %02x %02x %02x %02x %02x %02x %02x\n",
-		       p[0], p[1], p[2], p[3], p[4], p[5], p[6], p[7]);
-		p += 8;
+	for (o = 0; i > 0; o += 16, p += 16, i--) {
+		printf("%08X:\t%02X %02X %02X %02X %02X %02X %02X %02X"
+			"-%02X %02X %02X %02X %02X %02X %02X %02X    ",
+			o, p[0], p[1], p[2], p[3], p[4], p[5], p[6], p[7],
+			p[8], p[9], p[10], p[11], p[12], p[13], p[14], p[15]);
+		for (j = 0; j < 16; ++j) {
+			c = *(p + j);
+			if (c < 0x20 || c >0x7f)
+				c = '.';
+			printf("%c", c);
+		}
+		printf("\n");
 	}
 	free(datbuf);
 	free(oobbuf);
@@ -473,9 +518,9 @@ int do_nand(cmd_tbl_t * cmdtp, int flag, int argc, char * const argv[])
 		}
 
 		dev = (int)simple_strtoul(argv[2], NULL, 10);
-		set_dev(dev);
+		ret = set_dev(dev);
 
-		return 0;
+		return ret;
 	}
 
 #ifdef CONFIG_ENV_OFFSET_OOB
@@ -510,7 +555,10 @@ int do_nand(cmd_tbl_t * cmdtp, int flag, int argc, char * const argv[])
 	 *   0    1     2       3    4
 	 *   nand erase [clean] [off size]
 	 */
-	if (strncmp(cmd, "erase", 5) == 0 || strncmp(cmd, "scrub", 5) == 0) {
+	if (!strcmp(cmd, "erase") || !strncmp(cmd, "erase.", 6)
+	    || !strncmp(cmd, "scrub", 5)
+	   )
+	{
 		nand_erase_options_t opts;
 		/* "clean" at index 2 means request to write cleanmarker */
 		int clean = argc > 2 && !strcmp("clean", argv[2]);
@@ -609,6 +657,10 @@ int do_nand(cmd_tbl_t * cmdtp, int flag, int argc, char * const argv[])
 			goto usage;
 
 		addr = (ulong)simple_strtoul(argv[2], NULL, 16);
+		if (addr < CONFIG_SYS_SDRAM_BASE) {
+			printf("Invalid RAM address %08lx\n", addr);
+			return 1;
+		}
 
 		read = strncmp(cmd, "read", 4) == 0; /* 1 = read, 0 = write */
 		printf("\nNAND %s: ", read ? "read" : "write");
@@ -668,7 +720,7 @@ int do_nand(cmd_tbl_t * cmdtp, int flag, int argc, char * const argv[])
 			}
 			ret = nand_write_skip_bad(nand, off, &rwsize,
 						(u_char *)addr,
-						WITH_INLINE_OOB);
+						WITH_YAFFS_OOB);
 #endif
 		} else if (!strcmp(s, ".oob")) {
 			/* out-of-band data */
@@ -695,36 +747,219 @@ int do_nand(cmd_tbl_t * cmdtp, int flag, int argc, char * const argv[])
 		return ret == 0 ? 0 : 1;
 	}
 
-	if (strcmp(cmd, "markbad") == 0) {
+#if defined(DEBUG_BAD_BLOCK)
+	if (!strncmp(cmd, "markbad", 7)) {
+		uint32_t erasesize_mask = nand->erasesize - 1;
+		ulong off;
+		u_char buf[4], buf1[4];
+
 		argc -= 2;
 		argv += 2;
-
 		if (argc <= 0)
 			goto usage;
 
-		while (argc > 0) {
-			addr = simple_strtoul(*argv, NULL, 16);
-
-			if (nand->block_markbad(nand, addr)) {
-				printf("block 0x%08lx NOT marked "
-					"as bad! ERROR %d\n",
-					addr, ret);
-				ret = 1;
-			} else {
-				printf("block 0x%08lx successfully "
-					"marked as bad\n",
-					addr);
-			}
-			--argc;
-			++argv;
+		if (!nand->block_markbad) {
+			printf("mtd->block_markbad is not defined!\n");
+			return 0;
 		}
-		return ret;
-	}
+		for (; argc > 0; --argc, ++argv) {
+			off = (ulong)simple_strtoul(*argv, NULL, 16);
+			off &= ~erasesize_mask;	/* aligned to block address */
+			if ((ret = nand_read_raw(nand, buf, off, 0, sizeof(buf))) != 0) {
+				printf("read oob from %lx fail. (ret %d)\n", off, ret);
+				continue;
+			}
+			if ((ret = nand_read_raw(nand, buf1, off + nand->writesize, 0, sizeof(buf1))) != 0) {
+				printf("read oob from %lx fail. (ret %d)\n", off + nand->writesize, ret);
+				continue;
+			}
+			if (buf[0] != 0xFF || buf1[0] != 0xFF) {
+				printf("offset %lx is bad-block. (mark %02x,%02x, bbt state %d)\n",
+					off, buf[0], buf1[0], nand_block_isbad(nand, off));
+				continue;
+			}
 
-	if (strcmp(cmd, "biterr") == 0) {
-		/* todo */
-		return 1;
+			if (!(ret = nand->block_markbad(nand, off)))
+				printf("block 0x%08lx successfully marked as bad\n", off);
+			else
+				printf("block 0x%08lx NOT marked as bad! ERROR %d\n", off, ret);
+		}
+
+		return 0;
 	}
+	if (!strncmp(cmd, "erasebad", 9)) {
+		uint32_t erasesize_mask = nand->erasesize - 1;
+		ulong off;
+		u_char buf[4], buf1[4];
+
+		argc -= 2;
+		argv += 2;
+		if (argc <= 0)
+			goto usage;
+
+		for (; argc > 0; --argc, ++argv) {
+			off = simple_strtoul(*argv, NULL, 16);
+			off &= ~erasesize_mask;	/* aligned to block address */
+			if ((ret = nand_read_raw(nand, buf, off, 0, sizeof(buf))) != 0) {
+				printf("read oob from %lx fail. (ret %d)\n", off, ret);
+				continue;
+			}
+			if ((ret = nand_read_raw(nand, buf1, off + nand->writesize, 0, sizeof(buf1))) != 0) {
+				printf("read oob from %lx fail. (ret %d)\n", off + nand->writesize, ret);
+				return 0;
+			}
+			if (buf[0] == 0xFF && buf1[0] == 0xFF) {
+				printf("offset %lx is not bad-block\n", off);
+				continue;
+			} else if ((buf[0] != SW_BAD_BLOCK_INDICATION && buf[0] != 0xFF) ||
+				   (buf1[0] != SW_BAD_BLOCK_INDICATION && buf1[0] != 0xFF))
+			{
+				printf("skip unknown bad-block indication byte. (mark %02x,%02x)\n", buf[0], buf1[0]);
+				continue;
+			}
+			if (!(ret = nand_erase_scrub(nand, off, nand->erasesize))) {
+				printf("block 0x%08lx successfully erased as good\n", off);
+				nand->ecc_stats.badblocks--;
+			} else
+				printf("block 0x%08lx NOT erased as good! ERROR %d\n", off, ret);
+		}
+
+		return 0;
+	}
+#endif	/* DEBUG_BAD_BLOCK */
+
+#if defined(DEBUG_ECC_CORRECTION)
+	if (!strncmp(cmd, "flipbits", 8)) {
+		/* nand flipbits <page_number> byte_addr:bit_addr[,bit_addr][,bit_addr...]
+		 * [byte_addr:bit_addr[,bit_addr][,bit_addr...]
+		 * [byte_addr:bit_addr[,bit_addr][,bit_addr...]
+		 * [byte_addr:bit_addr[,bit_addr][,bit_addr...]
+		 * Up to 4 bytes can be alerted.
+		 */
+		const int pages_per_block = nand->erasesize / nand->writesize;
+		struct mtd_oob_ops ops;
+		int i, mod_cnt = 0, ret, cnt;
+		ulong off;
+		struct mod_s {
+			unsigned int byte_addr;
+			unsigned int bit_mask;
+		} mod_ary[4], *mod = &mod_ary[0];
+		unsigned int block, page, start_page, byte_addr, bit;
+		char *q;
+		unsigned char c, *p;
+		unsigned char blk_buf[nand->erasesize + pages_per_block * nand->oobsize]  __attribute__ ((aligned(4)));
+		struct erase_info ei;
+		uint32_t erasesize_shift = ffs(nand->erasesize) - 1;
+		uint32_t writesize_shift = ffs(nand->writesize) - 1;
+
+		if (argc < 4)
+			return 1;
+		if (!nand->erase || !nand->write_oob) {
+			printf("Invalid nand->erase %p or nand->write_oob %p\n", nand->erase, nand->write_oob);
+			return 1;
+		}
+
+		page = simple_strtoul(argv[2], NULL, 16);
+		if (page * nand->writesize >= nand->size) {
+			printf("invalid page 0x%x\n", page);
+			return 1;
+		}
+		start_page = page & ~(pages_per_block - 1);
+		printf("erasesize_shift %d writesize_shift %d\n", erasesize_shift, writesize_shift);
+		block = start_page >> (erasesize_shift - writesize_shift);
+		printf("page 0x%x start_page 0x%x block 0x%x\n", page, start_page, block);
+
+		/* parsing byte address, bit address */
+		for (i = 3; i < argc; ++i) {
+			if ((q = strchr(argv[i], ':')) == NULL) {
+				printf("colon symbol not found.\n");
+				return 1;
+			}
+
+			*q = '\0';
+			byte_addr = simple_strtoul(argv[i], NULL, 16);
+			if (byte_addr >= (2048 + 64)) {
+				printf("invalid byte address 0x%x\n", byte_addr);
+				return 1;
+			}
+			mod->byte_addr = byte_addr;
+			mod->bit_mask = 0;
+
+			q++;
+			while (q && *q != '\0') {
+				if (*q < '0' || *q > '9') {
+					printf("invalid character. (%c %x)\n", *q, *q);
+					return 1;
+				}
+				bit = simple_strtoul(q, NULL, 16);
+				if (bit >= 8) {
+					printf("invalid bit address %d\n", bit);
+					return 1;
+				}
+				mod->bit_mask |= (1 << bit);
+				q = strchr(q, ',');
+				if (q)
+					q++;
+			}
+			mod_cnt++;
+			mod++;
+		}
+
+		if (!mod_cnt) {
+			printf("byte address/bit address pair is not specified.\n");
+			return 1;
+		}
+
+		/* read a block from block-aligned address with valid OOB information */
+		for (i = 0, cnt = 0, p = &blk_buf[0], off = start_page << writesize_shift;
+		     i < pages_per_block;
+		     ++i, p += nand->writesize + nand->oobsize, off += nand->writesize)
+		{
+			if ((ret = raw_access(nand, (ulong) p, off, 1, 1)) < 0)
+				printf("read page 0x%x fail. (ret %d)\n", start_page + i, ret);
+			else
+				cnt++;
+		}
+
+		if (cnt != pages_per_block)
+			return 1;
+
+		/* erase block */
+		memset(&ei, 0, sizeof(ei));
+		ei.mtd = nand;
+		ei.addr = block << erasesize_shift;
+		ei.len = nand->erasesize;
+		if ((ret = nand->erase(nand, &ei)) != 0) {
+			printf("Erase addr %x len %x fail. (ret %d)\n",
+				(unsigned int) ei.addr, (unsigned int)ei.len, ret);
+			return 1;
+		}
+
+		/* flip bits */
+		p = &blk_buf[0] + ((page - start_page) << writesize_shift) + ((page - start_page) * nand->oobsize);
+		for (i = 0, mod = &mod_ary[0]; i < mod_cnt; ++i, ++mod) {
+			c = *(p + mod->byte_addr);
+			*(p + mod->byte_addr) ^= mod->bit_mask;
+			printf("flip page 0x%x byte 0x%x bitmask 0x%x: orig val %02x -> %02x\n",
+				page, mod->byte_addr, mod->bit_mask, c, *(p + mod->byte_addr));
+		}
+
+		/* use raw write to write back page and oob information */
+		for (i = 0, p = &blk_buf[0]; i < pages_per_block; ++i) {
+			memset(&ops, 0, sizeof(ops));
+			ops.datbuf = p;
+			ops.len = nand->writesize;
+			ops.oobbuf = p + nand->writesize;
+			ops.ooblen = nand->oobsize;
+			ops.mode =  MTD_OOB_RAW;
+			if ((ret = nand->write_oob(nand, (start_page + i) << writesize_shift, &ops)) != 0)
+				printf("write page 0x%x fail. (ret %d)\n", start_page + i, ret);
+
+			p += nand->writesize + nand->oobsize;
+		}
+		return 0;
+	}
+#endif	/* DEBUG_ECC_CORRECTION */
 
 #ifdef CONFIG_CMD_NAND_LOCK_UNLOCK
 	if (strcmp(cmd, "lock") == 0) {
@@ -801,8 +1036,17 @@ U_BOOT_CMD(
 	"nand dump[.oob] off - dump page\n"
 	"nand scrub [-y] off size | scrub.part partition | scrub.chip\n"
 	"    really clean NAND erasing bad blocks (UNSAFE)\n"
+#if defined(DEBUG_BAD_BLOCK)
 	"nand markbad off [...] - mark bad block(s) at offset (UNSAFE)\n"
-	"nand biterr off - make a bit error at offset (UNSAFE)"
+	"nand erasebad off [...] - erase bad block at offset (UNSAFE)\n"
+#endif
+#if defined(DEBUG_ECC_CORRECTION)
+	"nand flipbits <page_number> \n"
+	"    byte_addr:bit_addr[,bit_addr][,bit_addr...]\n"
+	"    [byte_addr:bit_addr[,bit_addr][,bit_addr...]\n"
+	"    [byte_addr:bit_addr[,bit_addr][,bit_addr...]\n"
+	"    [byte_addr:bit_addr[,bit_addr][,bit_addr...]\n"
+#endif
 #ifdef CONFIG_CMD_NAND_LOCK_UNLOCK
 	"\n"
 	"nand lock [tight] [status]\n"

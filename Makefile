@@ -57,6 +57,13 @@ export	HOSTARCH HOSTOS SHELL
 VENDOR=
 
 #########################################################################
+# QSDK 1.3 ES3
+export HOSTCC=arm-openwrt-linux-gcc
+export HOSTSTRIP=true
+export CROSS_COMPILE=arm-openwrt-linux-
+export STAGING_DIR=`which arm-openwrt-linux-gcc|sed -e "s,/bin/arm-openwrt-linux--gcc,,"`
+
+#########################################################################
 # Allow for silent builds
 ifeq (,$(findstring s,$(MAKEFLAGS)))
 XECHO = echo
@@ -140,7 +147,7 @@ unexport CDPATH
 # The "examples" conditionally depend on U-Boot (say, when USE_PRIVATE_LIBGCC
 # is "yes"), so compile examples after U-Boot is compiled.
 SUBDIR_TOOLS = tools
-SUBDIR_EXAMPLES = examples/standalone examples/api
+#SUBDIR_EXAMPLES = examples/standalone examples/api
 SUBDIRS = $(SUBDIR_TOOLS)
 
 .PHONY : $(SUBDIRS) $(VERSION_FILE) $(TIMESTAMP_FILE)
@@ -304,6 +311,7 @@ LIBS += common/libcommon.o
 LIBS += lib/libfdt/libfdt.o
 LIBS += api/libapi.o
 LIBS += post/libpost.o
+LIBS += test/libtest.o
 
 ifneq ($(CONFIG_AM33XX)$(CONFIG_OMAP34XX)$(CONFIG_OMAP44XX)$(CONFIG_OMAP54XX),)
 LIBS += $(CPUDIR)/omap-common/libomap-common.o
@@ -380,6 +388,8 @@ ALL-$(CONFIG_ONENAND_U_BOOT) += $(obj)u-boot-onenand.bin
 ONENAND_BIN ?= $(obj)onenand_ipl/onenand-ipl-2k.bin
 ALL-$(CONFIG_SPL) += $(obj)spl/u-boot-spl.bin
 ALL-$(CONFIG_OF_SEPARATE) += $(obj)u-boot.dtb $(obj)u-boot-dtb.bin
+ALL-$(CONFIG_MBN_HEADER) += $(obj)u-boot.mbn
+ALL-$(CONFIG_BLS_FIT_IMAGE) += $(obj)u-boot_$(shell echo $(CONFIG_FLASH_TYPE)).img
 
 all:		$(ALL-y) $(SUBDIR_EXAMPLES)
 
@@ -400,6 +410,9 @@ $(obj)u-boot.bin:	$(obj)u-boot
 		$(OBJCOPY) ${OBJCFLAGS} -O binary $< $@
 		$(BOARD_SIZE_CHECK)
 
+$(obj)u-boot.mbn:	$(obj)u-boot.bin
+		python tools/mkheader.py $(CONFIG_SYS_TEXT_BASE) $(CONFIG_IPQ_APPSBL_IMG_TYPE) $< $@
+
 $(obj)u-boot.ldr:	$(obj)u-boot
 		$(CREATE_LDR_ENV)
 		$(LDR) -T $(CONFIG_BFIN_CPU) -c $@ $< $(LDR_FLAGS)
@@ -417,6 +430,19 @@ $(obj)u-boot.img:	$(obj)u-boot.bin
 		-n $(shell sed -n -e 's/.*U_BOOT_VERSION//p' $(VERSION_FILE) | \
 			sed -e 's/"[	 ]*$$/ for $(BOARD) board"/') \
 		-d $< $@
+
+$(obj)u-boot.elf:	$(obj)u-boot
+		@cp -f $< $@
+		@sstrip $@
+
+$(obj)u-boot_%.img:	$(obj)u-boot.elf
+		python tools/pack.py -t $* -B -F boardconfig -o ../$@ tools/$(shell echo $(CONFIG_MODEL))
+
+$(obj)u-boot_%.trx: $(obj)u-boot_%.img
+		$(obj)tools/mkimage -A $(ARCH) -T firmware -C none \
+		-O u-boot -a $(CONFIG_SYS_TEXT_BASE) -e 0 \
+		-n "U-Boot image" -d $< $@ && \
+		$(obj)tools/addmg -f $(shell printf "%d" $(CONFIG_MAX_BL_BINARY_SIZE)) -d $@
 
 $(obj)u-boot.imx:       $(obj)u-boot.bin
 		$(obj)tools/mkimage -n  $(CONFIG_IMX_CONFIG) -T imximage \
@@ -556,8 +582,9 @@ checkstack:
 			`$(FIND) $(obj) -name u-boot-spl -print` | \
 			perl $(src)tools/checkstack.pl $(ARCH)
 
+.PHONY : tags ctags etags cscope
 tags ctags:
-		ctags -w -o $(obj)ctags `$(FIND) $(FINDFLAGS) $(TAG_SUBDIRS) \
+		ctags -w -o $(obj)$@ `$(FIND) $(FINDFLAGS) $(TAG_SUBDIRS) \
 						-name '*.[chS]' -print`
 
 etags:
@@ -623,7 +650,7 @@ $(obj)include/generated/asm-offsets.h:	$(obj)include/autoconf.mk.dep \
 $(obj)$(CPUDIR)/$(SOC)/asm-offsets.s:	$(obj)include/autoconf.mk.dep
 	@mkdir -p $(obj)$(CPUDIR)/$(SOC)
 	if [ -f $(src)$(CPUDIR)/$(SOC)/asm-offsets.c ];then \
-		$(CC) -DDO_DEPS_ONLY \
+		$(CC) -DDO_DEPS_ONLY -DDO_SOC_DEPS_ONLY \
 		$(CFLAGS) $(CFLAGS_$(BCURDIR)/$(@F)) $(CFLAGS_$(BCURDIR)) \
 			-o $@ $(src)$(CPUDIR)/$(SOC)/asm-offsets.c -c -S; \
 	else \
@@ -645,7 +672,7 @@ endif	# config.mk
 
 $(VERSION_FILE):
 		@mkdir -p $(dir $(VERSION_FILE))
-		@( localvers='$(shell $(TOPDIR)/tools/setlocalversion $(TOPDIR))' ; \
+		@( localvers='$(shell $(TOPDIR)/tools/setlocalversion $(TOPDIR)/../../..)' ; \
 		   printf '#define PLAIN_VERSION "%s%s"\n' \
 			"$(U_BOOT_VERSION)" "$${localvers}" ; \
 		   printf '#define U_BOOT_VERSION "U-Boot %s%s"\n' \
@@ -748,6 +775,7 @@ clean:
 	       $(obj)tools/envcrc					  \
 	       $(obj)tools/gdb/{astest,gdbcont,gdbsend}			  \
 	       $(obj)tools/gen_eth_addr    $(obj)tools/img2srec		  \
+	       $(obj)tools/dump{env,}image		  \
 	       $(obj)tools/mk{env,}image   $(obj)tools/mpc86x_clk	  \
 	       $(obj)tools/mk{smdk5250,}spl				  \
 	       $(obj)tools/ncb		   $(obj)tools/ubsha1
@@ -779,8 +807,8 @@ tidy:	clean
 	@find $(OBJTREE) -type f \( -name '*.depend*' \) -print | xargs rm -f
 
 clobber:	tidy
-	@find $(OBJTREE) -type f \( -name '*.srec' \
-		-o -name '*.bin' -o -name u-boot.img \) \
+	@find $(OBJTREE) \( -name '*partition.bin' -o -name "smem.bin" \) -prune -o \
+		-type f \( -name '*.srec' -o -name '*.bin' -o -name u-boot.img \) \
 		-print0 | xargs -0 rm -f
 	@rm -f $(OBJS) $(obj)*.bak $(obj)ctags $(obj)etags $(obj)TAGS \
 		$(obj)cscope.* $(obj)*.*~

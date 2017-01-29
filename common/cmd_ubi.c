@@ -47,6 +47,68 @@ int ubifs_is_mounted(void);
 void cmd_ubifs_umount(void);
 #endif
 
+#define UBI_LAYOUT_HEAD_FMT	"%8s  %13s  %9s  %8s  %8s  %15s  %8s  %10s  %13s  %9s  %10s  %8s  %s"
+#define UBI_LAYOUT_DATA_FMT	"%8x  %13x  %9x  %8x  %8s  %15x  %8x  %10x  %13x  %9x  %10x  %8x  %s"
+static void ubi_dump_vol_info_wide(const struct ubi_volume *vol)
+{
+	char name[UBI_VOL_NAME_MAX+1], type[] = "UNKNOWN (%d)XXX";
+
+	memset(name, 0, sizeof(name));
+	if (vol->name_len <= UBI_VOL_NAME_MAX &&
+		strnlen(vol->name, vol->name_len + 1) == vol->name_len) {
+		strcpy(name, vol->name);
+	} else {
+		strncpy(name, vol->name, 5);
+	}
+
+	if (vol->vol_type == UBI_DYNAMIC_VOLUME)
+		strcpy(type, "dynamic");
+	else if (vol->vol_type == UBI_STATIC_VOLUME)
+		strcpy(type, "static");
+	else
+		sprintf(type, "Unknown (%d)", vol->vol_type);
+
+	ubi_msg(UBI_LAYOUT_DATA_FMT,
+		vol->vol_id,
+		vol->reserved_pebs,
+		vol->alignment,
+		vol->data_pad,
+		type,
+		vol->usable_leb_size,
+		vol->used_ebs,
+		(unsigned int)vol->used_bytes,
+		vol->last_eb_bytes,
+		vol->corrupted,
+		vol->upd_marker,
+		vol->name_len,
+		name);
+}
+
+static void display_volume_info_wide(struct ubi_device *ubi)
+{
+	int i;
+
+	ubi_msg(UBI_LAYOUT_HEAD_FMT,
+		"vol_id",
+		"reserved_pebs",
+		"alignment",
+		"data_pad",
+		"vol_type",
+		"usable_leb_size",
+		"used_ebs",
+		"used_bytes",
+		"last_eb_bytes",
+		"corrupted",
+		"upd_marker",
+		"name_len",
+		"name");
+	for (i = 0; i < (ubi->vtbl_slots + 1); i++) {
+		if (!ubi->volumes[i])
+			continue;	/* Empty record */
+		ubi_dump_vol_info_wide(ubi->volumes[i]);
+	}
+}
+
 static void ubi_dump_vol_info(const struct ubi_volume *vol)
 {
 	ubi_msg("volume information dump:");
@@ -58,7 +120,7 @@ static void ubi_dump_vol_info(const struct ubi_volume *vol)
 	ubi_msg("name_len        %d", vol->name_len);
 	ubi_msg("usable_leb_size %d", vol->usable_leb_size);
 	ubi_msg("used_ebs        %d", vol->used_ebs);
-	ubi_msg("used_bytes      %lld", vol->used_bytes);
+	ubi_msg("used_bytes      %ld", (long)vol->used_bytes);
 	ubi_msg("last_eb_bytes   %d", vol->last_eb_bytes);
 	ubi_msg("corrupted       %d", vol->corrupted);
 	ubi_msg("upd_marker      %d", vol->upd_marker);
@@ -88,7 +150,7 @@ static void display_volume_info(struct ubi_device *ubi)
 static void display_ubi_info(struct ubi_device *ubi)
 {
 	ubi_msg("MTD device name:            \"%s\"", ubi->mtd->name);
-	ubi_msg("MTD device size:            %llu MiB", ubi->flash_size >> 20);
+	ubi_msg("MTD device size:            %lu MiB", (unsigned long)ubi->flash_size >> 20);
 	ubi_msg("physical eraseblock size:   %d bytes (%d KiB)",
 			ubi->peb_size, ubi->peb_size >> 10);
 	ubi_msg("logical eraseblock size:    %d bytes", ubi->leb_size);
@@ -112,8 +174,10 @@ static void display_ubi_info(struct ubi_device *ubi)
 
 static int ubi_info(int layout)
 {
-	if (layout)
+	if (layout == 1)
 		display_volume_info(ubi);
+	else if (layout == 2)
+		display_volume_info_wide(ubi);
 	else
 		display_ubi_info(ubi);
 
@@ -218,6 +282,10 @@ static int ubi_remove_vol(char *volume)
 	if (vol == NULL)
 		return ENODEV;
 
+	if (!strncmp(vol->name, "Factory", 7)) {
+		printf("Remove volume %s is inhibited\n", vol->name);
+		return EROFS;
+	}
 	printf("Remove UBI volume %s (id %d)\n", vol->name, vol->vol_id);
 
 	if (ubi->ro_mode) {
@@ -279,6 +347,11 @@ static int ubi_volume_write(char *volume, void *buf, size_t size)
 		return EINVAL;
 	}
 
+	if (!strncmp(vol->name, "Factory", 7) && (!size || size != rsvd_bytes)) {
+		printf("Partial write to volume %s is inhibited\n", vol->name);
+		return EROFS;
+	}
+
 	err = ubi_start_update(ubi, vol, size);
 	if (err < 0) {
 		printf("Cannot start volume update\n");
@@ -308,12 +381,23 @@ static int ubi_volume_write(char *volume, void *buf, size_t size)
 		ubi_gluebi_updated(vol);
 	}
 
-	printf("%d bytes written to volume %s\n", size, volume);
+	printf("\n0x%x bytes written to volume %s\n", size, volume);
 
 	return 0;
 }
 
-static int ubi_volume_read(char *volume, char *buf, size_t size)
+long long ubi_get_volume_size(char *volume)
+{
+	struct ubi_volume *vol;
+
+	vol = ubi_find_volume(volume);
+	if (vol == NULL)
+		return -ENODEV;
+
+	return vol->used_bytes;
+}
+
+static int ubi_volume_read(char *volume, char *buf, size_t size, size_t offset)
 {
 	int err, lnum, off, len, tbuf_size;
 	void *tbuf;
@@ -325,7 +409,8 @@ static int ubi_volume_read(char *volume, char *buf, size_t size)
 	if (vol == NULL)
 		return ENODEV;
 
-	printf("Read %d bytes from volume %s to %p\n", size, volume, buf);
+	offp = offset;
+	printf("Read 0x%x bytes from volume [%s] offset 0x%x to %p\n", size, volume, offset, buf);
 
 	if (vol->updating) {
 		printf("updating");
@@ -339,7 +424,7 @@ static int ubi_volume_read(char *volume, char *buf, size_t size)
 		return 0;
 
 	if (size == 0) {
-		printf("No size specified -> Using max size (%lld)\n", vol->used_bytes);
+		printf("No size specified -> Using max size (0x%lx)\n", (long)vol->used_bytes);
 		size = vol->used_bytes;
 	}
 
@@ -387,6 +472,8 @@ static int ubi_volume_read(char *volume, char *buf, size_t size)
 	} while (size);
 
 	free(tbuf);
+	debug("\n0x%x bytes read from volume %s\n", size, volume);
+
 	return err;
 }
 
@@ -431,11 +518,12 @@ static int ubi_dev_scan(struct mtd_info *info, char *ubidev,
 	return 0;
 }
 
-static int do_ubi(cmd_tbl_t * cmdtp, int flag, int argc, char * const argv[])
+int do_ubi(cmd_tbl_t * cmdtp, int flag, int argc, char * const argv[])
 {
 	size_t size = 0;
 	ulong addr = 0;
 	int err = 0;
+	size_t vol_offset = 0;
 
 	if (argc < 2)
 		return CMD_RET_USAGE;
@@ -521,6 +609,21 @@ static int do_ubi(cmd_tbl_t * cmdtp, int flag, int argc, char * const argv[])
 		return 0;
 	}
 
+	if (strcmp(argv[1], "detach") == 0) {
+		if (ubi_initialized) {
+			ubi_exit();
+			del_mtd_partitions(ubi_dev.mtd_info);
+			put_mtd_device(ubi_dev.mtd_info);
+			ubi_dev.mtd_info = NULL;
+			ubi_initialized = 0;
+			ubi_dev.selected = 0;
+			if (ubi)
+				memset(ubi, 0, sizeof(*ubi));
+		}
+
+		return 0;
+	}
+
 	if ((strcmp(argv[1], "part") != 0) && (!ubi_dev.selected)) {
 		printf("Error, no UBI device/partition selected!\n");
 		return 1;
@@ -530,6 +633,8 @@ static int do_ubi(cmd_tbl_t * cmdtp, int flag, int argc, char * const argv[])
 		int layout = 0;
 		if (argc > 2 && !strncmp(argv[2], "l", 1))
 			layout = 1;
+		if (argc > 2 && !strncmp(argv[2], "w", 1))
+			layout = 2;
 		return ubi_info(layout);
 	}
 
@@ -556,8 +661,13 @@ static int do_ubi(cmd_tbl_t * cmdtp, int flag, int argc, char * const argv[])
 		}
 		/* Use maximum available size */
 		if (!size) {
-			size = ubi->avail_pebs * ubi->leb_size;
-			printf("No size specified -> Using max size (%u)\n", size);
+			if (ubi->avail_pebs < MIN_AVAILABLE_PEB) {
+				ubi_err("available_pebs %d < MIN_AVAILABLE_PEB %d\n",
+					ubi->avail_pebs, MIN_AVAILABLE_PEB);
+				return 1;
+			}
+			size = (ubi->avail_pebs - MIN_AVAILABLE_PEB) * ubi->leb_size;
+			printf("No size specified -> Using max size (0x%x)\n", size);
 		}
 		/* E.g., create volume */
 		if (argc == 3)
@@ -584,6 +694,13 @@ static int do_ubi(cmd_tbl_t * cmdtp, int flag, int argc, char * const argv[])
 
 	if (strncmp(argv[1], "read", 4) == 0) {
 		size = 0;
+		vol_offset = 0;
+
+		/* E.g., offset in volume */
+		if (argc == 6) {
+			vol_offset = simple_strtoul(argv[5], NULL, 16);
+			argc--;
+		}
 
 		/* E.g., read volume size */
 		if (argc == 5) {
@@ -598,7 +715,7 @@ static int do_ubi(cmd_tbl_t * cmdtp, int flag, int argc, char * const argv[])
 		}
 
 		if (argc == 3)
-			return ubi_volume_read(argv[3], (char *)addr, size);
+			return ubi_volume_read(argv[3], (char *)addr, size, vol_offset);
 	}
 
 	printf("Please see usage\n");
@@ -611,18 +728,30 @@ U_BOOT_CMD(
 	"part [part] [offset]\n"
 		" - Show or set current partition (with optional VID"
 		" header offset)\n"
-	"ubi info [l[ayout]]"
+	"ubi detach"
+		" - Detach UBI device.\n"
+	"ubi info [l[ayout]]|[w[layout]]"
 		" - Display volume and ubi layout information\n"
 	"ubi create[vol] volume [size] [type]"
 		" - create volume name with size\n"
 	"ubi write[vol] address volume size"
 		" - Write volume from address with size\n"
-	"ubi read[vol] address volume [size]"
+	"ubi read[vol] address volume [size] [offset]"
 		" - Read volume to address with size\n"
-	"ubi remove[vol] volume"
-		" - Remove volume\n"
 	"[Legends]\n"
 	" volume: character name\n"
 	" size: specified in bytes\n"
 	" type: s[tatic] or d[ynamic] (default=dynamic)"
 );
+
+/** Return pointer to actived UBI device.
+ * If UBI device is not initialized, return NULL instead.
+ * @return:	pointer to UBI device or NULL.
+ */
+struct ubi_device* get_ubi_device(void)
+{
+	if (!ubi_initialized || ubi_dev.selected == 0 || !ubi)
+		return NULL;
+
+	return ubi;
+}
