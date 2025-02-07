@@ -6,14 +6,15 @@
 # fw_printenv is supposed to run on the target system, which means it should be
 # built with cross tools. Although it may look weird, we only replace "HOSTCC"
 # with "CC" here for the maximum code reuse of scripts/Makefile.host.
-override HOSTCC = $(CC)
+override HOSTCC = $(CC) -static
 
 # Compile for a hosted environment on the target
 HOST_EXTRACFLAGS  = -I$(srctree)/tools \
 		$(patsubst -I%,-idirafter%, $(filter -I%, $(UBOOTINCLUDE))) \
 		-idirafter $(srctree)/tools/env \
 		-DUSE_HOSTCC \
-		-DTEXT_BASE=$(TEXT_BASE)
+		-DTEXT_BASE=$(TEXT_BASE) \
+		-static
 
 ifeq ($(MTD_VERSION),old)
 HOST_EXTRACFLAGS += -DMTD_OLD
